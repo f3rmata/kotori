@@ -70,6 +70,7 @@ void hamming_window(q15_t *pWindow);
 /* USER CODE BEGIN 0 */
 #define SAMPLE_LENGTH 1024
 #define FFT_LENGTH 1024
+#define TABLE_SIZE 256 // 波表长度
 
 #define Q15_SBIT 0x8000
 #define Q15_MBITS 0x7FFF

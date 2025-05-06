@@ -2,9 +2,6 @@
 #define DDS_STM32
 #include <stdint.h>
 
-// 一些宏定义
-#define TABLE_SIZE 256 // 波表长度
-
 typedef struct {
   uint16_t *wavetable; // 指向堆上波表的指针
   // uint16_t *dactable;  // 指向堆上DAC输出波表的指针
