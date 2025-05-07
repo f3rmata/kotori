@@ -162,7 +162,11 @@ int main(void)
 
   AD983X ad9834;
   AD983X_init(&ad9834, &hspi1, AD9834_FSYNC_GPIO_Port, AD9834_FSYNC_Pin,
-              AD9834_RST_GPIO_Port, AD9834_RST_Pin, 1);
+              AD9834_RST_GPIO_Port, AD9834_RST_Pin, (uint8_t)75);
+
+  AD983X_setSleep(&ad9834, SLEEP_MODE_NONE);
+  AD983X_setOutputMode(&ad9834, OUTPUT_MODE_SINE);
+  AD983X_setSignOutput(&ad9834, SIGN_OUTPUT_MSB);
   /* USER CODE END 2 */
 
   /* Infinite loop */

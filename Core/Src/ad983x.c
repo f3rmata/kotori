@@ -27,22 +27,18 @@
 // ------------------ AD983X 基础函数 ------------------
 
 void AD983X_writeReg(AD983X *self, uint16_t value) {
+  uint8_t data[2] = {0};
+  data[0] = (uint8_t)((value >> 8) & 0xff);
+  data[1] = (uint8_t)(value & 0xff);
   HAL_GPIO_WritePin(self->m_select_port, self->m_select_pin, GPIO_PIN_RESET);
-  HAL_SPI_Transmit(self->hspi, (uint8_t *)&value, 2, 40);
-  HAL_GPIO_WritePin(self->m_select_port, self->m_select_pin, GPIO_PIN_SET);
-}
-
-void AD983X_writeReg2(AD983X *self, uint16_t value1, uint16_t value2) {
-  uint16_t value[2] = {value1, value2};
-  HAL_GPIO_WritePin(self->m_select_port, self->m_select_pin, GPIO_PIN_RESET);
-  HAL_SPI_Transmit(self->hspi, (uint8_t *)value, 4, 40);
+  HAL_SPI_Transmit(self->hspi, (uint8_t *)&data, 2, 40);
   HAL_GPIO_WritePin(self->m_select_port, self->m_select_pin, GPIO_PIN_SET);
 }
 
 void AD983X_setFrequencyWord(AD983X *self, uint8_t reg, float frequency) {
   uint16_t reg_freq = reg ? REG_FREQ1 : REG_FREQ0;
-  AD983X_writeReg2(self, reg_freq | ((uint32_t)frequency & 0x3FFF),
-                   reg_freq | (((uint32_t)frequency >> 14) & 0x3FFF));
+  AD983X_writeReg(self, reg_freq | ((uint32_t)frequency & 0x3FFF));
+  AD983X_writeReg(self, reg_freq | (((uint32_t)frequency >> 14) & 0x3FFF));
 }
 
 void AD983X_setPhaseWord(AD983X *self, uint8_t reg, uint32_t phase) {
@@ -74,10 +70,10 @@ void AD983X_reset(AD983X *self) {
   HAL_GPIO_WritePin(self->m_reset_port, self->m_reset_pin, GPIO_PIN_RESET);
 }
 
-void AD983X_ctor(AD983X *self, uint16_t select_pin, float frequency_hz,
-                 uint16_t reset_pin) {
+void AD983X_ctor(AD983X *self, uint16_t select_pin, uint16_t reset_pin,
+                 uint8_t clk_mhz) {
   self->m_select_pin = select_pin;
-  self->m_frequency_hz = frequency_hz;
+  self->m_clk_scaler = (1L << 28) / clk_mhz;
   self->m_reg = REG_B28;
   HAL_GPIO_WritePin(self->m_select_port, self->m_select_pin, GPIO_PIN_SET);
   self->m_reset_pin = reset_pin;
@@ -86,25 +82,23 @@ void AD983X_ctor(AD983X *self, uint16_t select_pin, float frequency_hz,
 }
 
 void AD983X_setFrequency(AD983X *self, uint8_t reg, float frequency) {
-  uint32_t freq_word =
-      (uint32_t)((frequency * (1L << 28)) / (self->m_frequency_hz));
+  uint32_t freq_word = (uint32_t)(frequency * self->m_clk_scaler / 1000000);
   AD983X_setFrequencyWord(self, reg, freq_word);
 }
 
 void AD983X_init(AD983X *self, SPI_HandleTypeDef *hspi,
                  GPIO_TypeDef *select_port, uint16_t select_pin,
                  GPIO_TypeDef *reset_port, uint16_t reset_pin,
-                 float frequency_mhz) {
+                 uint8_t clk_mhz) {
   self->hspi = hspi;
   self->m_select_port = select_port;
   self->m_select_pin = select_pin;
   self->m_reset_port = reset_port;
   self->m_reset_pin = reset_pin;
-  self->m_frequency_hz = frequency_mhz;
+  self->m_clk_scaler = (1L << 28) / clk_mhz;
   AD983X_reset(self);
-  AD983X_writeReg(self, self->m_reg);
-  AD983X_setFrequency(self, 0, 10000);
-  AD983X_setFrequency(self, 1, 10000);
-  AD983X_setPhaseWord(self, 0, 0);
-  AD983X_setPhaseWord(self, 1, 0);
+  AD983X_setFrequency(self, 0, 100);
+  AD983X_setFrequency(self, 1, 100);
+  // AD983X_setPhaseWord(self, 0, 0);
+  // AD983X_setPhaseWord(self, 1, 0);
 }

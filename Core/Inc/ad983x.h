@@ -36,16 +36,15 @@ struct AD983X {
   uint16_t m_select_pin;
   GPIO_TypeDef *m_reset_port;
   uint16_t m_reset_pin;
-  float m_frequency_hz;
   uint16_t m_reg;
+  uint32_t m_clk_scaler;
 };
 
 //--------------------- 相关函数实现 ---------------------
 
 void AD983X_init(AD983X *self, SPI_HandleTypeDef *hspi,
                  GPIO_TypeDef *select_port, uint16_t select_pin,
-                 GPIO_TypeDef *reset_port, uint16_t reset_pin,
-                 float frequency_mhz);
+                 GPIO_TypeDef *reset_port, uint16_t reset_pin, uint8_t clk_mhz);
 void AD983X_setFrequency(AD983X *self, uint8_t reg, float frequency);
 void AD983X_setFrequencyWord(AD983X *self, uint8_t reg, float frequency);
 void AD983X_setPhaseWord(AD983X *self, uint8_t reg, uint32_t phase);
@@ -53,9 +52,8 @@ void AD983X_setSignOutput(AD983X *self, SignOutput out);
 void AD983X_setOutputMode(AD983X *self, OutputMode out);
 void AD983X_setSleep(AD983X *self, SleepMode out);
 void AD983X_reset(AD983X *self);
-void AD983X_ctor(AD983X *self, uint16_t select_pin, float frequency_hz,
-                 uint16_t reset_pin);
+void AD983X_ctor(AD983X *self, uint16_t select_pin, uint16_t reset_pin,
+                 uint8_t clk_mhz);
 void AD983X_writeReg(AD983X *self, uint16_t value);
-void AD983X_writeReg2(AD983X *self, uint16_t value1, uint16_t value2);
 
 #endif
