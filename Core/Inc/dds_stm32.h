@@ -13,7 +13,10 @@ typedef struct {
 uint16_t *create_wavetable(uint32_t size);
 DDS *dds_init(uint16_t *dactable, uint32_t table_size, uint32_t freq,
               uint32_t sample_rate);
-uint16_t dds_output(DDS *dds);
+
+void DDS_SetPhase(DDS *dds, float phase_deg, float phase_max);
+void DDS_UpdateBuffer(uint16_t *buffer, DDS *dds, uint16_t offset,
+                      uint16_t length);
 void dds_free(DDS *dds);
 
 #endif

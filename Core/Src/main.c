@@ -71,6 +71,13 @@ void hamming_window(q15_t *pWindow);
 #define SAMPLE_LENGTH 1024
 #define FFT_LENGTH 1024
 #define TABLE_SIZE 256 // 波表长度
+#define OF 2147.483648 // 2^32 / 2M，用于频率控制字计算
+#define PHASE_MAX ((1UL << PHASE_BITS) - 1)
+#define PHASE_STEP(freq)                                                       \
+  ((uint32_t)((((double)(freq)) * (double)(1ULL << PHASE_BITS)) / SYS_CLK_FREQ))
+#define PHASE_BITS 32          // 相位累加器位宽
+#define OUTPUT_FREQ 10000      // 默认输出频率(Hz)
+#define SYS_CLK_FREQ 2000000UL // DAC采样频率(由TIM6决定)
 
 #define Q15_SBIT 0x8000
 #define Q15_MBITS 0x7FFF
@@ -135,7 +142,12 @@ int main(void) {
   HAL_COMP_Start(&hcomp1);
   HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_value, SAMPLE_LENGTH);
 
+  // 初始化 stm32 dds 设置
   stm32_dds = dds_init(dactable, TABLE_SIZE, 10000, 2000000);
+  // 设置初始频率
+  stm32_dds->phase_inc = PHASE_STEP(OUTPUT_FREQ);
+  // 填充初始DMA缓冲
+  DDS_UpdateBuffer(dactable, stm32_dds, 0, TABLE_SIZE);
   HAL_TIM_Base_Start(&htim7);
   HAL_TIM_Base_Start(&htim15);
   HAL_DAC_Start_DMA(&hdac3, DAC_CHANNEL_1, (uint32_t *)dactable, WAVE_LENGTH,
@@ -280,42 +292,15 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc) {
 
 // void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdac) {
 //   if (hdac == &hdac3) {
-//     for (uint16_t i = 0; i < stm32_dds->table_size / 2; i++) {
-//       dactable[i] = stm32_dds->wavetable[stm32_dds->phase_acc >> 24];
-//       stm32_dds->phase_acc += stm32_dds->phase_inc;
-//     }
+//     DDS_UpdateBuffer(dactable, stm32_dds, 0, TABLE_SIZE / 2);
 //   }
 // }
 //
 // void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdac) {
 //   if (hdac == &hdac3) {
-//     for (uint16_t i = stm32_dds->table_size / 2; i < stm32_dds->table_size;
-//          i++) {
-//       dactable[i] = stm32_dds->wavetable[stm32_dds->phase_acc >> 24];
-//       stm32_dds->phase_acc += stm32_dds->phase_inc;
-//     }
+//     DDS_UpdateBuffer(dactable, stm32_dds, TABLE_SIZE / 2, TABLE_SIZE / 2);
 //   }
 // }
-//
-// void HAL_DAC_ConvHalfCpltCallbackCh2(DAC_HandleTypeDef *hdac) {
-//   if (hdac == &hdac3) {
-//     for (uint16_t i = 0; i < stm32_dds->table_size / 2; i++) {
-//       dactable[i] = stm32_dds->wavetable[stm32_dds->phase_acc >> 24];
-//       stm32_dds->phase_acc += stm32_dds->phase_inc;
-//     }
-//   }
-// }
-//
-// void HAL_DAC_ConvCpltCallbackCh2(DAC_HandleTypeDef *hdac) {
-//   if (hdac == &hdac3) {
-//     for (uint16_t i = stm32_dds->table_size / 2; i < stm32_dds->table_size;
-//          i++) {
-//       dactable[i] = stm32_dds->wavetable[stm32_dds->phase_acc >> 24];
-//       stm32_dds->phase_acc += stm32_dds->phase_inc;
-//     }
-//   }
-// }
-
 void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp) {
   if (hcomp == &hcomp1) {
     // HAL_DAC_Stop_DMA(&hdac3, DAC_CHANNEL_1);

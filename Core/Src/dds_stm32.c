@@ -32,12 +32,19 @@ DDS *dds_init(uint16_t *dactable, uint32_t table_size, uint32_t freq,
   return dds;
 }
 
-// 取出一个采样点
-uint16_t dds_output(DDS *dds) {
-  uint16_t index = dds->phase_acc % dds->table_size;
-  float value = dds->wavetable[index];
-  dds->phase_acc += dds->phase_inc;
-  return value;
+void DDS_SetPhase(DDS *dds, float phase_deg, float phase_max) {
+  // phase_deg: 0~360°
+  uint32_t phase_word = (uint32_t)((phase_deg / 360.0f) * (float)phase_max);
+  dds->phase_acc += phase_word;
+}
+
+void DDS_UpdateBuffer(uint16_t *buffer, DDS *dds, uint16_t offset,
+                      uint16_t length) {
+  for (uint16_t i = 0; i < length; i++) {
+    // 取相位累加器高8位作为波表索引
+    buffer[offset + i] = dds->wavetable[(dds->phase_acc >> 24) & 0xFF];
+    dds->phase_acc += dds->phase_inc;
+  }
 }
 
 // 释放DDS
