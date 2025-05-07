@@ -59,6 +59,10 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define LED_Pin GPIO_PIN_6
 #define LED_GPIO_Port GPIOC
+#define AD9834_RST_Pin GPIO_PIN_11
+#define AD9834_RST_GPIO_Port GPIOC
+#define AD9834_FSYNC_Pin GPIO_PIN_4
+#define AD9834_FSYNC_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 
