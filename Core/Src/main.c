@@ -92,9 +92,15 @@ q15_t fft_in[FFT_LENGTH] = {0};
 q15_t fft_out[FFT_LENGTH * 2] = {0};
 q15_t cmplx_mag_out[FFT_LENGTH * 2] = {0};
 uint8_t adc_conv_finished = 0;
+uint16_t max_freq = 100;
+uint16_t sec_freq = 100;
 
 DDS *stm32_dds;
 uint16_t dactable[TABLE_SIZE] = {0};
+
+AD983X ad9834;
+
+uint8_t comp_flag = 0;
 /* USER CODE END 0 */
 
 /**
@@ -137,6 +143,7 @@ int main(void) {
   MX_TIM7_Init();
   MX_COMP1_Init();
   MX_SPI1_Init();
+  MX_TIM4_Init();
   /* USER CODE BEGIN 2 */
   uint8_t str[] = "\r\n-------------USART_Sending------------------\r\n";
   HAL_UART_Transmit(&huart1, str, sizeof(str) / sizeof(str[0]), 40);
@@ -151,6 +158,7 @@ int main(void) {
   stm32_dds->phase_inc = PHASE_STEP(OUTPUT_FREQ);
   // 填充初始DMA缓冲
   DDS_UpdateBuffer(dactable, stm32_dds, 0, TABLE_SIZE);
+  HAL_TIM_Base_Start(&htim4);
   HAL_TIM_Base_Start(&htim7);
   HAL_TIM_Base_Start(&htim15);
   HAL_DAC_Start_DMA(&hdac3, DAC_CHANNEL_1, (uint32_t *)dactable, WAVE_LENGTH,
@@ -160,13 +168,12 @@ int main(void) {
   HAL_OPAMP_Start(&hopamp1);
   HAL_OPAMP_Start(&hopamp3);
 
-  AD983X ad9834;
   AD983X_init(&ad9834, &hspi1, AD9834_FSYNC_GPIO_Port, AD9834_FSYNC_Pin,
               AD9834_RST_GPIO_Port, AD9834_RST_Pin, (uint8_t)75);
   AD983X_setFrequency(&ad9834, 0, 100000.0);
 
   // AD983X_setSleep(&ad9834, SLEEP_MODE_NONE);
-  // AD983X_setOutputMode(&ad9834, OUTPUT_MODE_SINE);
+  // AD983X_setOutputMode(&ad9834, OUTPUT_MODE_TRIANGLE);
   // AD983X_setSignOutput(&ad9834, SIGN_OUTPUT_MSB);
   /* USER CODE END 2 */
 
@@ -216,8 +223,8 @@ int main(void) {
       arm_max_q15(cmplx_mag_out, FFT_LENGTH / 2 + 1, &max_second_result,
                   &max_second_index);
 
-      uint16_t max_freq = (max_index + 1) * 2;
-      uint16_t sec_freq = (max_second_index + 1) * 2;
+      max_freq = (max_index + 1) * 2;
+      sec_freq = (max_second_index + 1) * 2;
       // 将频率近似到5k的整数倍
       max_freq = ((max_freq + 2) / 5) * 5;
       sec_freq = ((sec_freq + 2) / 5) * 5;
@@ -226,10 +233,16 @@ int main(void) {
               sec_freq);
       HAL_UART_Transmit(&huart1, cmp_str_buf, strlen((char *)cmp_str_buf), 40);
 
-      SET_DAC_TIM_FREQ(&htim7, max_freq);
-      SET_DAC_TIM_FREQ(&htim15, sec_freq);
+      AD983X_setFrequency(&ad9834, 0, max_freq * 1000);
+      // SET_DAC_TIM_FREQ(&htim7, max_freq);
+      // SET_DAC_TIM_FREQ(&htim15, sec_freq);
       HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
       adc_conv_finished = 0;
+    }
+    if (comp_flag) {
+      // AD983X_setFrequency(&ad9834, 0, max_freq * 1000);
+      HAL_Delay(1000);
+      comp_flag = 0;
     }
     // HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_value, SAMPLE_TIMES);
     /* USER CODE END WHILE */
@@ -315,6 +328,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc) {
 // }
 void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp) {
   if (hcomp == &hcomp1) {
+    // comp_flag = 1;
     // HAL_DAC_Stop_DMA(&hdac3, DAC_CHANNEL_1);
     // HAL_DAC_Start_DMA(&hdac3, DAC_CHANNEL_1, (uint32_t *)sin_wave,
     // WAVE_LENGTH,

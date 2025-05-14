@@ -22,10 +22,13 @@
 #define REG_DIV2 0x0008
 #define REG_MODE 0x0002
 
+/* 波形选择宏定义 */
+#define Triangle_Wave 0x2002
+#define Sine_Wave 0x2008
+#define Square_Wave 0x2028
+
 #define SIGN_OUTPUT_MASK (REG_OPBITEN | REG_SIGNPIB | REG_DIV2 | REG_MODE)
 #define SLEEP_MASK (REG_SLEEP1 | REG_SLEEP12)
-
-// ------------------ AD983X 基础函数 ------------------
 
 void AD983X_writeReg(AD983X *self, uint16_t value) {
   uint8_t data[2] = {0};
@@ -34,10 +37,6 @@ void AD983X_writeReg(AD983X *self, uint16_t value) {
   HAL_GPIO_WritePin(self->m_select_port, self->m_select_pin, GPIO_PIN_RESET);
   HAL_SPI_Transmit(self->hspi, (uint8_t *)&data, 2, HAL_MAX_DELAY);
   HAL_GPIO_WritePin(self->m_select_port, self->m_select_pin, GPIO_PIN_SET);
-}
-
-void AD983X_setPhaseWord(AD983X *self, uint8_t reg, uint32_t phase) {
-  AD983X_writeReg(self, (reg ? REG_PHASE1 : REG_PHASE0) | (phase & 0x0FFF));
 }
 
 void AD983X_setSignOutput(AD983X *self, SignOutput out) {
@@ -68,6 +67,35 @@ void AD983X_reset(AD983X *self) {
   HAL_GPIO_WritePin(self->m_reset_port, self->m_reset_pin, GPIO_PIN_RESET);
 }
 
+/**
+ * @brief Sets the output waveform of the AD983X device.
+ *
+ * This function configures the AD983X device to output a specific waveform
+ * based on the provided mode. The available modes correspond to different
+ * waveform types such as sine, triangle, and square waves.
+ *
+ * @param self Pointer to the AD983X device instance.
+ * @param mode The waveform mode to set:
+ *             - 0: Sine wave
+ *             - 1: Triangle wave
+ *             - 2: Square wave
+ *
+ * @note Ensure that the mode parameter is within the valid range (0-2).
+ *       Passing an invalid mode may result in undefined behavior.
+ */
+void AD983X_setOutputWave(AD983X *self, uint8_t mode) {
+  switch (mode) {
+  case 0:
+    AD983X_writeReg(self, Sine_Wave);
+    break;
+  case 1:
+    AD983X_writeReg(self, Triangle_Wave);
+    break;
+  case 2:
+    AD983X_writeReg(self, Square_Wave);
+  }
+}
+
 // void AD983X_ctor(AD983X *self, uint16_t select_pin, uint16_t reset_pin,
 //                  uint8_t clk_mhz) {
 //   self->m_select_pin = select_pin;
@@ -78,6 +106,10 @@ void AD983X_reset(AD983X *self) {
 //   HAL_GPIO_WritePin(self->m_reset_port, self->m_reset_pin, GPIO_PIN_SET);
 //   self->m_reg |= REG_PINSW | REG_RESET;
 // }
+
+void AD983X_setPhaseWord(AD983X *self, uint8_t reg, uint32_t phase) {
+  AD983X_writeReg(self, (reg ? REG_PHASE1 : REG_PHASE0) | (phase & 0x0FFF));
+}
 
 void AD983X_setFrequencyWord(AD983X *self, uint8_t reg, double frequency) {
   uint16_t reg_freq = reg ? REG_FREQ1 : REG_FREQ0;
