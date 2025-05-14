@@ -37,7 +37,7 @@ struct AD983X {
   GPIO_TypeDef *m_reset_port;
   uint16_t m_reset_pin;
   uint16_t m_reg;
-  uint32_t m_clk_scaler;
+  double m_clk_scaler;
 };
 
 //--------------------- 相关函数实现 ---------------------
@@ -45,8 +45,8 @@ struct AD983X {
 void AD983X_init(AD983X *self, SPI_HandleTypeDef *hspi,
                  GPIO_TypeDef *select_port, uint16_t select_pin,
                  GPIO_TypeDef *reset_port, uint16_t reset_pin, uint8_t clk_mhz);
-void AD983X_setFrequency(AD983X *self, uint8_t reg, float frequency);
-void AD983X_setFrequencyWord(AD983X *self, uint8_t reg, float frequency);
+void AD983X_setFrequency(AD983X *self, uint8_t reg, double frequency);
+void AD983X_setFrequencyWord(AD983X *self, uint8_t reg, double frequency);
 void AD983X_setPhaseWord(AD983X *self, uint8_t reg, uint32_t phase);
 void AD983X_setSignOutput(AD983X *self, SignOutput out);
 void AD983X_setOutputMode(AD983X *self, OutputMode out);
