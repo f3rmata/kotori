@@ -37,6 +37,7 @@
 #include "wave.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 /* USER CODE END Includes */
 
@@ -64,8 +65,11 @@
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-void SET_DAC_TIM_FREQ(TIM_HandleTypeDef *htim, uint32_t freqk);
+void SET_DAC_TIM_FREQ(TIM_HandleTypeDef *htim, uint16_t wavelen, uint32_t freqk,
+                      uint32_t phase);
 void hamming_window(q15_t *pWindow);
+uint16_t *generate_sine_wave_table(uint32_t table_size, uint16_t amplitudey);
+uint16_t *generate_cosine_wave_table(uint32_t table_size, uint16_t amplitudey);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -91,16 +95,18 @@ uint16_t adc_value[SAMPLE_LENGTH] = {0};
 q15_t fft_in[FFT_LENGTH] = {0};
 q15_t fft_out[FFT_LENGTH * 2] = {0};
 q15_t cmplx_mag_out[FFT_LENGTH * 2] = {0};
+// q15_t cmplx_ang_out[FFT_LENGTH * 2] = {0};
 uint8_t adc_conv_finished = 0;
 uint16_t max_freq = 100;
 uint16_t sec_freq = 100;
 
-DDS *stm32_dds;
-uint16_t dactable[TABLE_SIZE] = {0};
+// DDS *stm32_dds;
+uint16_t *sintable = NULL;
+uint16_t *costable = NULL;
 
-AD983X ad9834;
-
+// AD983X ad9834;
 uint8_t comp_flag = 0;
+double phase_err = 0;
 /* USER CODE END 0 */
 
 /**
@@ -143,34 +149,24 @@ int main(void) {
   MX_TIM7_Init();
   MX_COMP1_Init();
   MX_SPI1_Init();
-  MX_TIM4_Init();
   /* USER CODE BEGIN 2 */
   uint8_t str[] = "\r\n-------------USART_Sending------------------\r\n";
   HAL_UART_Transmit(&huart1, str, sizeof(str) / sizeof(str[0]), 40);
 
-  HAL_TIM_Base_Start(&htim3);
-  HAL_COMP_Start(&hcomp1);
-  HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_value, SAMPLE_LENGTH);
-
   // 初始化 stm32 dds 设置
-  stm32_dds = dds_init(dactable, TABLE_SIZE, 10000, 2000000);
-  // 设置初始频率
-  stm32_dds->phase_inc = PHASE_STEP(OUTPUT_FREQ);
-  // 填充初始DMA缓冲
-  DDS_UpdateBuffer(dactable, stm32_dds, 0, TABLE_SIZE);
-  HAL_TIM_Base_Start(&htim4);
-  HAL_TIM_Base_Start(&htim7);
-  HAL_TIM_Base_Start(&htim15);
-  HAL_DAC_Start_DMA(&hdac3, DAC_CHANNEL_1, (uint32_t *)dactable, WAVE_LENGTH,
-                    DAC_ALIGN_12B_R);
-  HAL_DAC_Start_DMA(&hdac3, DAC_CHANNEL_2, (uint32_t *)dactable, WAVE_LENGTH,
-                    DAC_ALIGN_12B_R);
+  // stm32_dds = dds_init(dactable, TABLE_SIZE, 10000, 2000000);
+  // // 设置初始频率
+  // stm32_dds->phase_inc = PHASE_STEP(OUTPUT_FREQ);
+  // // 填充初始DMA缓冲
+  // DDS_UpdateBuffer(dactable, stm32_dds, 0, TABLE_SIZE);
+  // HAL_TIM_Base_Start(&htim4);
+
   HAL_OPAMP_Start(&hopamp1);
   HAL_OPAMP_Start(&hopamp3);
 
-  AD983X_init(&ad9834, &hspi1, AD9834_FSYNC_GPIO_Port, AD9834_FSYNC_Pin,
-              AD9834_RST_GPIO_Port, AD9834_RST_Pin, (uint8_t)75);
-  AD983X_setFrequency(&ad9834, 0, 100000.0);
+  // AD983X_init(&ad9834, &hspi1, AD9834_FSYNC_GPIO_Port, AD9834_FSYNC_Pin,
+  //             AD9834_RST_GPIO_Port, AD9834_RST_Pin, (uint8_t)75);
+  // AD983X_setFrequency(&ad9834, 0, 100000.0);
 
   // AD983X_setSleep(&ad9834, SLEEP_MODE_NONE);
   // AD983X_setOutputMode(&ad9834, OUTPUT_MODE_TRIANGLE);
@@ -184,6 +180,26 @@ int main(void) {
   arm_rfft_init_q15(&forwardS, FFT_LENGTH, 0, 1);
   // arm_rfft_init_q15(&backwardS, FFT_LENGTH, 1, 0);
   // arm_rfft_init_1024_q15(&S, 0, 0);
+
+  // 从 0 相位开始采集
+  HAL_TIM_Base_Start(&htim3);
+  HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_value, SAMPLE_LENGTH);
+  HAL_COMP_Start(&hcomp1);
+  while (!comp_flag)
+    ;
+  // uint16_t adc_single_value = 65534;
+  // HAL_ADC_Start(&hadc1);
+  // do {
+  //   HAL_ADC_PollForConversion(&hadc1, 100);
+  //   // 判断ADC是否转换成功
+  //   if (HAL_IS_BIT_SET(HAL_ADC_GetState(&hadc1), HAL_ADC_STATE_REG_EOC)) {
+  //     // 读取值
+  //     adc_single_value = HAL_ADC_GetValue(&hadc1);
+  //   }
+  // } while (adc_single_value > 2058 || adc_single_value < 2038);
+  // HAL_ADC_Stop(&hadc1);
+
+  uint16_t index0 = 0;
   while (1) {
     if (adc_conv_finished) {
       q15_t h_window[FFT_LENGTH] = {0};
@@ -233,23 +249,64 @@ int main(void) {
               sec_freq);
       HAL_UART_Transmit(&huart1, cmp_str_buf, strlen((char *)cmp_str_buf), 40);
 
-      AD983X_setFrequency(&ad9834, 0, max_freq * 1000);
+      // AD983X_setFrequency(&ad9834, 0, max_freq * 1000);
       // SET_DAC_TIM_FREQ(&htim7, max_freq);
       // SET_DAC_TIM_FREQ(&htim15, sec_freq);
+      SET_DAC_TIM_FREQ(&htim7, 100, max_freq * 1000, 0);
+      SET_DAC_TIM_FREQ(&htim15, 100, sec_freq * 1000, 0);
+      HAL_TIM_Base_Start(&htim7);
+      HAL_TIM_Base_Start(&htim15);
+      sintable = generate_sine_wave_table(100, 2048);
+      costable = generate_cosine_wave_table(100, 2048);
+      uint8_t dactable_str_buf[50] = {0};
+      for (uint16_t i = 0; i < 100; i++) {
+        sprintf((char *)dactable_str_buf, "dactable[%d]: %d\n", i, sintable[i]);
+        HAL_UART_Transmit(&huart1, dactable_str_buf,
+                          strlen((char *)dactable_str_buf), 40);
+      }
+      HAL_DAC_Start_DMA(&hdac3, DAC_CHANNEL_1, (uint32_t *)sintable, 100,
+                        DAC_ALIGN_12B_R);
+      HAL_DAC_Start_DMA(&hdac3, DAC_CHANNEL_2, (uint32_t *)sintable, 100,
+                        DAC_ALIGN_12B_R);
+
+      // 找到 0 相位点
+      for (uint16_t i = 0; i < SAMPLE_LENGTH; i++) {
+        if (fft_in[i] > 2040 && fft_in[i] < 2050) {
+          index0 = i;
+          break;
+        }
+      }
+
       HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
       adc_conv_finished = 0;
     }
-    if (comp_flag) {
-      // AD983X_setFrequency(&ad9834, 0, max_freq * 1000);
-      HAL_Delay(1000);
-      comp_flag = 0;
+
+    uint16_t sum_sin = 0;
+    uint16_t sum_cos = 0;
+    for (uint8_t i = 0; i < 100; i++) {
+      sum_sin += fft_in[index0 + i] * sintable[i];
+      sum_cos += fft_in[index0 + i] * costable[i];
     }
+    phase_err = atan2(sum_sin, sum_cos);
+    if (phase_err < 0) {
+      phase_err = -phase_err;
+    } else {
+      phase_err = 2 * PI - phase_err;
+    }
+    // uint8_t phase_str[50] = {0};
+    // sprintf((char *)phase_str, "phase_err: %f\n", phase_err);
+    // HAL_UART_Transmit(&huart1, phase_str, 50, 50);
+    SET_DAC_TIM_FREQ(&htim7, 100, max_freq * 1000, phase_err);
+    // HAL_Delay(10);
+
     // HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_value, SAMPLE_TIMES);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
   }
-  dds_free(stm32_dds);
+  // dds_free(stm32_dds);
+  free(sintable);
+  free(costable);
   /* USER CODE END 3 */
 }
 
@@ -326,9 +383,10 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc) {
 //     DDS_UpdateBuffer(dactable, stm32_dds, TABLE_SIZE / 2, TABLE_SIZE / 2);
 //   }
 // }
+
 void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp) {
   if (hcomp == &hcomp1) {
-    // comp_flag = 1;
+    comp_flag = 1;
     // HAL_DAC_Stop_DMA(&hdac3, DAC_CHANNEL_1);
     // HAL_DAC_Start_DMA(&hdac3, DAC_CHANNEL_1, (uint32_t *)sin_wave,
     // WAVE_LENGTH,
@@ -345,11 +403,6 @@ void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp) {
     //   i--;
     // }
   }
-}
-
-void SET_DAC_TIM_FREQ(TIM_HandleTypeDef *htim, uint32_t freqk) {
-  uint32_t arr = 3400 / freqk - 3;
-  __HAL_TIM_SET_AUTORELOAD(htim, arr);
 }
 
 q15_t float2q15(float f) {
@@ -374,6 +427,52 @@ void hamming_window(q15_t *pWindow) {
   }
 }
 
+void SET_DAC_TIM_FREQ(TIM_HandleTypeDef *htim, uint16_t wavelen, uint32_t freqk,
+                      uint32_t phase) {
+  uint32_t arr =
+      320000000 * PI / ((2 * PI * wavelen * freqk) - (wavelen * phase)) - 1;
+  __HAL_TIM_SET_AUTORELOAD(htim, arr);
+}
+
+uint16_t *generate_sine_wave_table(uint32_t table_size, uint16_t amplitude) {
+  // 分配波表内存
+  uint16_t *wave_table = (uint16_t *)malloc(table_size * sizeof(uint16_t));
+  if (wave_table == NULL) {
+    return NULL; // 内存分配失败
+  }
+
+  // 计算角频率
+  float omega = 2.0f * M_PI / table_size;
+
+  // 填充波表
+  for (uint32_t i = 0; i < table_size; i++) {
+    float value = amplitude * (sin(omega * i) + 1.0f) / 2.0f +
+                  100; // 将值映射到 [100, amplitude]
+    wave_table[i] = (uint16_t)value;
+  }
+
+  return wave_table;
+}
+
+uint16_t *generate_cosine_wave_table(uint32_t table_size, uint16_t amplitude) {
+  // 分配波表内存
+  uint16_t *wave_table = (uint16_t *)malloc(table_size * sizeof(uint16_t));
+  if (wave_table == NULL) {
+    return NULL; // 内存分配失败
+  }
+
+  // 计算角频率
+  float omega = 2.0f * M_PI / table_size;
+
+  // 填充波表
+  for (uint32_t i = 0; i < table_size; i++) {
+    float value = amplitude * (cos(omega * i) + 1.0f) / 2.0f +
+                  100; // 将值映射到 [100, amplitude]
+    wave_table[i] = (uint16_t)value;
+  }
+
+  return wave_table;
+}
 /* USER CODE END 4 */
 
 /**
