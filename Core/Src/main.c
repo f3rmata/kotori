@@ -99,6 +99,7 @@ q15_t cmplx_mag_out[FFT_LENGTH * 2] = {0};
 // q15_t cmplx_ang_out[FFT_LENGTH * 2] = {0};
 uint8_t adc_conv_finished = 0;
 uint8_t fft_finished = 0;
+uint8_t cal_phase_err_finished = 1;
 uint16_t max_freq = 100;
 uint16_t sec_freq = 100;
 
@@ -203,123 +204,130 @@ int main(void) {
 
   uint16_t index0 = 0;
   while (1) {
-    if (adc_conv_finished && !fft_finished) {
-      HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET);
-      for (int i = 0; i < SAMPLE_LENGTH; i++) {
-        uint8_t adc_fmt_tmp_str[20] = {0};
-        sprintf((char *)adc_fmt_tmp_str, "adc: %d\n", adc_value[i]);
-        HAL_UART_Transmit(&huart1, adc_fmt_tmp_str,
-                          strlen((char *)adc_fmt_tmp_str), 40);
+    if (adc_conv_finished == 1) {
+      if (fft_finished == 0) {
+        HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET);
+        for (int i = 0; i < SAMPLE_LENGTH; i++) {
+          uint8_t adc_fmt_tmp_str[20] = {0};
+          sprintf((char *)adc_fmt_tmp_str, "adc: %d\n", adc_value[i]);
+          HAL_UART_Transmit(&huart1, adc_fmt_tmp_str,
+                            strlen((char *)adc_fmt_tmp_str), 40);
+        }
+        // memcpy(fft_in, adc_value, FFT_LENGTH);
+        for (size_t i = 0; i < FFT_LENGTH; ++i) {
+          fft_in[i] = (int16_t)((int32_t)adc_value[i] - 32768);
+        }
+
+        q15_t h_window[FFT_LENGTH] = {0};
+        hamming_window(h_window);
+        arm_mult_q15(fft_in, h_window, fft_in, FFT_LENGTH);
+        arm_rfft_q15(&forwardS, fft_in, fft_out);
+        arm_cmplx_mag_q15(fft_out, cmplx_mag_out, FFT_LENGTH / 2 + 1);
+
+        uint8_t fft_banner_str[] =
+            "\r\n-------------FFT_Result_Sending------------------\r\n";
+        HAL_UART_Transmit(&huart1, fft_banner_str,
+                          strlen((char *)fft_banner_str), 40);
+        for (int i = 0; i < FFT_LENGTH / 16; i++) {
+          uint8_t fft_fmt_tmp_str[50] = {0};
+          sprintf((char *)fft_fmt_tmp_str, "fft(%dk) : %d\n", i * 2,
+                  cmplx_mag_out[i] * 10);
+          HAL_UART_Transmit(&huart1, fft_fmt_tmp_str,
+                            strlen((char *)fft_fmt_tmp_str), 40);
+        }
+
+        // 去除直流分量
+        cmplx_mag_out[0] = 0;
+        cmplx_mag_out[1] = 0;
+        cmplx_mag_out[2] = 0;
+        cmplx_mag_out[3] = 0;
+        cmplx_mag_out[4] = 0;
+
+        // 查找频谱的第一个峰值
+        q15_t max_result = 0;
+        uint32_t max_index = 0;
+        arm_max_q15(cmplx_mag_out, FFT_LENGTH / 2 + 1, &max_result, &max_index);
+        cmplx_mag_out[max_index] = 0;
+
+        // 查找频谱的第二个峰值
+        q15_t max_second_result = 0;
+        uint32_t max_second_index = 0;
+        arm_max_q15(cmplx_mag_out, FFT_LENGTH / 2 + 1, &max_second_result,
+                    &max_second_index);
+
+        max_freq = (max_index + 1) * 2;
+        sec_freq = (max_second_index + 1) * 2;
+        // 将频率近似到5k的整数倍
+        max_freq = ((max_freq + 2) / 5) * 5;
+        sec_freq = ((sec_freq + 2) / 5) * 5;
+        uint8_t cmp_str_buf[50] = {0};
+        sprintf((char *)cmp_str_buf, "max: %uk, sec: %uk\r\n", max_freq,
+                sec_freq);
+        HAL_UART_Transmit(&huart1, cmp_str_buf, strlen((char *)cmp_str_buf),
+                          40);
+
+        // AD983X_setFrequency(&ad9834, 0, max_freq * 1000);
+        // SET_DAC_TIM_FREQ(&htim7, max_freq);
+        // SET_DAC_TIM_FREQ(&htim15, sec_freq);
+        SET_DAC_TIM_FREQ(&htim7, 100, max_freq * 1000);
+        SET_DAC_TIM_FREQ(&htim15, 100, sec_freq * 1000);
+        HAL_TIM_Base_Start(&htim7);
+        HAL_TIM_Base_Start(&htim15);
+        sintable = generate_sine_wave_table(100, 2048);
+        costable = generate_cosine_wave_table(100, 2048);
+        // uint8_t dactable_str_buf[50] = {0};
+        // for (uint16_t i = 0; i < 100; i++) {
+        //   sprintf((char *)dactable_str_buf, "dactable[%d]: %d\n", i,
+        //   sintable[i]); HAL_UART_Transmit(&huart1, dactable_str_buf,
+        //                     strlen((char *)dactable_str_buf), 40);
+        // }
+        HAL_DAC_Start_DMA(&hdac3, DAC_CHANNEL_1, (uint32_t *)sintable, 100,
+                          DAC_ALIGN_12B_R);
+        HAL_DAC_Start_DMA(&hdac3, DAC_CHANNEL_2, (uint32_t *)sintable, 100,
+                          DAC_ALIGN_12B_R);
+
+        HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
+        HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_value, SAMPLE_LENGTH);
+        adc_conv_finished = 0;
+        fft_finished = 1;
+      } else if (fft_finished && !cal_phase_err_finished) {
+        // 找到 0 相位点
+        // for (uint16_t i = 0; i < SAMPLE_LENGTH; i++) {
+        //   if ((adc_value[i] >> 4) > 2046 && (adc_value[i] >> 4) < 2050) {
+        //     index0 = i;
+        //     break;
+        //   }
+        // }
+        index0 = 0;
+
+        uint16_t sum_sin = 0;
+        uint16_t sum_cos = 0;
+        for (uint8_t i = 0; i < 100; i++) {
+          sum_sin +=
+              ((adc_value[index0 + i] >> 4) - 2048) * (sintable[i] - 2048);
+          sum_cos +=
+              ((adc_value[index0 + i] >> 4) - 2048) * (costable[i] - 2048);
+        }
+        phase_err = atan2(sum_sin, sum_cos);
+        // if (phase_err < 0) {
+        //   phase_err = -phase_err;
+        // } else {
+        //   phase_err = 2 * PI - phase_err;
+        // }
+        // uint8_t phase_str[50] = {0};
+        // sprintf((char *)phase_str, "phase_err: %f\n", phase_err);
+        // HAL_UART_Transmit(&huart1, phase_str, 50, 50);
+
+        ADD_DAC_TIM_PHASE(&htim7, max_freq * 1000, phase_err);
+        HAL_ADC_Stop_DMA(&hadc1);
+        HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_value, SAMPLE_LENGTH);
+
+        adc_conv_finished = 0;
+        cal_phase_err_finished = 1;
+        // SET_DAC_TIM_FREQ(&htim7, 100, max_freq * 1000, phase_err);
+        // HAL_Delay(10);
       }
-      // memcpy(fft_in, adc_value, FFT_LENGTH);
-      for (size_t i = 0; i < FFT_LENGTH; ++i) {
-        fft_in[i] = (int16_t)((int32_t)adc_value[i] - 32768);
-      }
-
-      q15_t h_window[FFT_LENGTH] = {0};
-      hamming_window(h_window);
-      arm_mult_q15(fft_in, h_window, fft_in, FFT_LENGTH);
-      arm_rfft_q15(&forwardS, fft_in, fft_out);
-      arm_cmplx_mag_q15(fft_out, cmplx_mag_out, FFT_LENGTH / 2 + 1);
-
-      uint8_t fft_banner_str[] =
-          "\r\n-------------FFT_Result_Sending------------------\r\n";
-      HAL_UART_Transmit(&huart1, fft_banner_str, strlen((char *)fft_banner_str),
-                        40);
-      for (int i = 0; i < FFT_LENGTH / 16; i++) {
-        uint8_t fft_fmt_tmp_str[50] = {0};
-        sprintf((char *)fft_fmt_tmp_str, "fft(%dk) : %d\n", i * 2,
-                cmplx_mag_out[i] * 10);
-        HAL_UART_Transmit(&huart1, fft_fmt_tmp_str,
-                          strlen((char *)fft_fmt_tmp_str), 40);
-      }
-
-      // 去除直流分量
-      cmplx_mag_out[0] = 0;
-      cmplx_mag_out[1] = 0;
-      cmplx_mag_out[2] = 0;
-      cmplx_mag_out[3] = 0;
-      cmplx_mag_out[4] = 0;
-
-      // 查找频谱的第一个峰值
-      q15_t max_result = 0;
-      uint32_t max_index = 0;
-      arm_max_q15(cmplx_mag_out, FFT_LENGTH / 2 + 1, &max_result, &max_index);
-      cmplx_mag_out[max_index] = 0;
-
-      // 查找频谱的第二个峰值
-      q15_t max_second_result = 0;
-      uint32_t max_second_index = 0;
-      arm_max_q15(cmplx_mag_out, FFT_LENGTH / 2 + 1, &max_second_result,
-                  &max_second_index);
-
-      max_freq = (max_index + 1) * 2;
-      sec_freq = (max_second_index + 1) * 2;
-      // 将频率近似到5k的整数倍
-      max_freq = ((max_freq + 2) / 5) * 5;
-      sec_freq = ((sec_freq + 2) / 5) * 5;
-      uint8_t cmp_str_buf[50] = {0};
-      sprintf((char *)cmp_str_buf, "max: %uk, sec: %uk\r\n", max_freq,
-              sec_freq);
-      HAL_UART_Transmit(&huart1, cmp_str_buf, strlen((char *)cmp_str_buf), 40);
-
-      // AD983X_setFrequency(&ad9834, 0, max_freq * 1000);
-      // SET_DAC_TIM_FREQ(&htim7, max_freq);
-      // SET_DAC_TIM_FREQ(&htim15, sec_freq);
-      SET_DAC_TIM_FREQ(&htim7, 100, max_freq * 1000);
-      SET_DAC_TIM_FREQ(&htim15, 100, sec_freq * 1000);
-      HAL_TIM_Base_Start(&htim7);
-      HAL_TIM_Base_Start(&htim15);
-      sintable = generate_sine_wave_table(100, 2048);
-      costable = generate_cosine_wave_table(100, 2048);
-      // uint8_t dactable_str_buf[50] = {0};
-      // for (uint16_t i = 0; i < 100; i++) {
-      //   sprintf((char *)dactable_str_buf, "dactable[%d]: %d\n", i,
-      //   sintable[i]); HAL_UART_Transmit(&huart1, dactable_str_buf,
-      //                     strlen((char *)dactable_str_buf), 40);
-      // }
-      HAL_DAC_Start_DMA(&hdac3, DAC_CHANNEL_1, (uint32_t *)sintable, 100,
-                        DAC_ALIGN_12B_R);
-      HAL_DAC_Start_DMA(&hdac3, DAC_CHANNEL_2, (uint32_t *)sintable, 100,
-                        DAC_ALIGN_12B_R);
-
-      HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
-      adc_conv_finished = 0;
-      fft_finished = 1;
     }
-
-    HAL_ADC_Stop_DMA(&hadc1);
-    HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_value, SAMPLE_LENGTH);
-    HAL_Delay(10);
-
-    // 找到 0 相位点
-    for (uint16_t i = 0; i < SAMPLE_LENGTH; i++) {
-      if (adc_value[i] > 2040 && adc_value[i] < 2050) {
-        index0 = i;
-        break;
-      }
-    }
-
-    uint16_t sum_sin = 0;
-    uint16_t sum_cos = 0;
-    for (uint8_t i = 0; i < 100; i++) {
-      sum_sin += ((adc_value[index0 + i] >> 4) - 2048) * (sintable[i] - 2048);
-      sum_cos += ((adc_value[index0 + i] >> 4) - 2048) * (costable[i] - 2048);
-    }
-    phase_err = atan2(sum_sin, sum_cos);
-    // if (phase_err < 0) {
-    //   phase_err = -phase_err;
-    // } else {
-    //   phase_err = 2 * PI - phase_err;
-    // }
-    // uint8_t phase_str[50] = {0};
-    // sprintf((char *)phase_str, "phase_err: %f\n", phase_err);
-    // HAL_UART_Transmit(&huart1, phase_str, 50, 50);
-
-    ADD_DAC_TIM_PHASE(&htim7, max_freq, phase_err);
-    // SET_DAC_TIM_FREQ(&htim7, 100, max_freq * 1000, phase_err);
-    // HAL_Delay(10);
-
     // HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_value, SAMPLE_TIMES);
     /* USER CODE END WHILE */
 
@@ -376,12 +384,7 @@ void SystemClock_Config(void) {
 /* USER CODE BEGIN 4 */
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc) {
   if (hadc == &hadc1) {
-    if (adc_conv_finished == 0) {
-      // memset(adc_value, 0, sizeof(adc_value));
-      // HAL_ADC_Stop_DMA(&hadc1);
-      adc_conv_finished = 1;
-    }
-    // HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_value, SAMPLE_TIMES);
+    adc_conv_finished = 1;
   }
 }
 
@@ -391,11 +394,16 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc) {
 //   }
 // }
 //
-// void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdac) {
-//   if (hdac == &hdac3) {
-//     DDS_UpdateBuffer(dactable, stm32_dds, TABLE_SIZE / 2, TABLE_SIZE / 2);
-//   }
-// }
+void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdac) {
+  if (hdac == &hdac3) {
+    cal_phase_err_finished = 0;
+    // 立即开始新的ADC采样，确保持续采集数据
+    if (!adc_conv_finished) {
+      HAL_ADC_Stop_DMA(&hadc1);
+      HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_value, SAMPLE_LENGTH);
+    }
+  }
+}
 
 void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp) {
   if (hcomp == &hcomp1) {
@@ -449,7 +457,7 @@ void SET_DAC_TIM_FREQ(TIM_HandleTypeDef *htim, uint16_t wavelen,
 
 void ADD_DAC_TIM_PHASE(TIM_HandleTypeDef *htim, uint16_t freq, uint16_t phase) {
   uint32_t cnt = htim->Instance->CNT;
-  cnt = cnt + 65535 - (phase * 160000000) / (2 * PI * freq);
+  cnt = cnt + (65535 - (phase * 160000000) / (2 * PI * freq));
   __HAL_TIM_SetCounter(htim, cnt);
 }
 
