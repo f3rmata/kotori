@@ -65,8 +65,9 @@
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-void SET_DAC_TIM_FREQ(TIM_HandleTypeDef *htim, uint16_t wavelen, uint32_t freqk,
-                      uint32_t phase);
+void SET_DAC_TIM_FREQ(TIM_HandleTypeDef *htim, uint16_t wavelen,
+                      uint32_t freqk);
+void ADD_DAC_TIM_PHASE(TIM_HandleTypeDef *htim, uint16_t freq, uint16_t phase);
 void hamming_window(q15_t *pWindow);
 uint16_t *generate_sine_wave_table(uint32_t table_size, uint16_t amplitudey);
 uint16_t *generate_cosine_wave_table(uint32_t table_size, uint16_t amplitudey);
@@ -97,6 +98,7 @@ q15_t fft_out[FFT_LENGTH * 2] = {0};
 q15_t cmplx_mag_out[FFT_LENGTH * 2] = {0};
 // q15_t cmplx_ang_out[FFT_LENGTH * 2] = {0};
 uint8_t adc_conv_finished = 0;
+uint8_t fft_finished = 0;
 uint16_t max_freq = 100;
 uint16_t sec_freq = 100;
 
@@ -184,9 +186,9 @@ int main(void) {
   // 从 0 相位开始采集
   HAL_TIM_Base_Start(&htim3);
   HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_value, SAMPLE_LENGTH);
-  HAL_COMP_Start(&hcomp1);
-  while (!comp_flag)
-    ;
+  // HAL_COMP_Start(&hcomp1);
+  // while (!comp_flag)
+  //   ;
   // uint16_t adc_single_value = 65534;
   // HAL_ADC_Start(&hadc1);
   // do {
@@ -201,7 +203,19 @@ int main(void) {
 
   uint16_t index0 = 0;
   while (1) {
-    if (adc_conv_finished) {
+    if (adc_conv_finished && !fft_finished) {
+      HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET);
+      for (int i = 0; i < SAMPLE_LENGTH; i++) {
+        uint8_t adc_fmt_tmp_str[20] = {0};
+        sprintf((char *)adc_fmt_tmp_str, "adc: %d\n", adc_value[i]);
+        HAL_UART_Transmit(&huart1, adc_fmt_tmp_str,
+                          strlen((char *)adc_fmt_tmp_str), 40);
+      }
+      // memcpy(fft_in, adc_value, FFT_LENGTH);
+      for (size_t i = 0; i < FFT_LENGTH; ++i) {
+        fft_in[i] = (int16_t)((int32_t)adc_value[i] - 32768);
+      }
+
       q15_t h_window[FFT_LENGTH] = {0};
       hamming_window(h_window);
       arm_mult_q15(fft_in, h_window, fft_in, FFT_LENGTH);
@@ -252,51 +266,58 @@ int main(void) {
       // AD983X_setFrequency(&ad9834, 0, max_freq * 1000);
       // SET_DAC_TIM_FREQ(&htim7, max_freq);
       // SET_DAC_TIM_FREQ(&htim15, sec_freq);
-      SET_DAC_TIM_FREQ(&htim7, 100, max_freq * 1000, 0);
-      SET_DAC_TIM_FREQ(&htim15, 100, sec_freq * 1000, 0);
+      SET_DAC_TIM_FREQ(&htim7, 100, max_freq * 1000);
+      SET_DAC_TIM_FREQ(&htim15, 100, sec_freq * 1000);
       HAL_TIM_Base_Start(&htim7);
       HAL_TIM_Base_Start(&htim15);
       sintable = generate_sine_wave_table(100, 2048);
       costable = generate_cosine_wave_table(100, 2048);
-      uint8_t dactable_str_buf[50] = {0};
-      for (uint16_t i = 0; i < 100; i++) {
-        sprintf((char *)dactable_str_buf, "dactable[%d]: %d\n", i, sintable[i]);
-        HAL_UART_Transmit(&huart1, dactable_str_buf,
-                          strlen((char *)dactable_str_buf), 40);
-      }
+      // uint8_t dactable_str_buf[50] = {0};
+      // for (uint16_t i = 0; i < 100; i++) {
+      //   sprintf((char *)dactable_str_buf, "dactable[%d]: %d\n", i,
+      //   sintable[i]); HAL_UART_Transmit(&huart1, dactable_str_buf,
+      //                     strlen((char *)dactable_str_buf), 40);
+      // }
       HAL_DAC_Start_DMA(&hdac3, DAC_CHANNEL_1, (uint32_t *)sintable, 100,
                         DAC_ALIGN_12B_R);
       HAL_DAC_Start_DMA(&hdac3, DAC_CHANNEL_2, (uint32_t *)sintable, 100,
                         DAC_ALIGN_12B_R);
 
-      // 找到 0 相位点
-      for (uint16_t i = 0; i < SAMPLE_LENGTH; i++) {
-        if (fft_in[i] > 2040 && fft_in[i] < 2050) {
-          index0 = i;
-          break;
-        }
-      }
-
       HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
       adc_conv_finished = 0;
+      fft_finished = 1;
+    }
+
+    HAL_ADC_Stop_DMA(&hadc1);
+    HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_value, SAMPLE_LENGTH);
+    HAL_Delay(10);
+
+    // 找到 0 相位点
+    for (uint16_t i = 0; i < SAMPLE_LENGTH; i++) {
+      if (adc_value[i] > 2040 && adc_value[i] < 2050) {
+        index0 = i;
+        break;
+      }
     }
 
     uint16_t sum_sin = 0;
     uint16_t sum_cos = 0;
     for (uint8_t i = 0; i < 100; i++) {
-      sum_sin += fft_in[index0 + i] * sintable[i];
-      sum_cos += fft_in[index0 + i] * costable[i];
+      sum_sin += ((adc_value[index0 + i] >> 4) - 2048) * (sintable[i] - 2048);
+      sum_cos += ((adc_value[index0 + i] >> 4) - 2048) * (costable[i] - 2048);
     }
     phase_err = atan2(sum_sin, sum_cos);
-    if (phase_err < 0) {
-      phase_err = -phase_err;
-    } else {
-      phase_err = 2 * PI - phase_err;
-    }
+    // if (phase_err < 0) {
+    //   phase_err = -phase_err;
+    // } else {
+    //   phase_err = 2 * PI - phase_err;
+    // }
     // uint8_t phase_str[50] = {0};
     // sprintf((char *)phase_str, "phase_err: %f\n", phase_err);
     // HAL_UART_Transmit(&huart1, phase_str, 50, 50);
-    SET_DAC_TIM_FREQ(&htim7, 100, max_freq * 1000, phase_err);
+
+    ADD_DAC_TIM_PHASE(&htim7, max_freq, phase_err);
+    // SET_DAC_TIM_FREQ(&htim7, 100, max_freq * 1000, phase_err);
     // HAL_Delay(10);
 
     // HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_value, SAMPLE_TIMES);
@@ -355,19 +376,11 @@ void SystemClock_Config(void) {
 /* USER CODE BEGIN 4 */
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc) {
   if (hadc == &hadc1) {
-    HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET);
-    for (int i = 0; i < SAMPLE_LENGTH; i++) {
-      uint8_t adc_fmt_tmp_str[20] = {0};
-      sprintf((char *)adc_fmt_tmp_str, "adc: %d\n", adc_value[i]);
-      HAL_UART_Transmit(&huart1, adc_fmt_tmp_str,
-                        strlen((char *)adc_fmt_tmp_str), 40);
+    if (adc_conv_finished == 0) {
+      // memset(adc_value, 0, sizeof(adc_value));
+      // HAL_ADC_Stop_DMA(&hadc1);
+      adc_conv_finished = 1;
     }
-    // memcpy(fft_in, adc_value, FFT_LENGTH);
-    for (size_t i = 0; i < FFT_LENGTH; ++i) {
-      fft_in[i] = (int16_t)((int32_t)adc_value[i] - 32768);
-    }
-    adc_conv_finished = 1;
-    memset(adc_value, 0, sizeof(adc_value));
     // HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_value, SAMPLE_TIMES);
   }
 }
@@ -387,6 +400,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc) {
 void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp) {
   if (hcomp == &hcomp1) {
     comp_flag = 1;
+    // __HAL_TIM_SetCounter(&htim3, 0);
     // HAL_DAC_Stop_DMA(&hdac3, DAC_CHANNEL_1);
     // HAL_DAC_Start_DMA(&hdac3, DAC_CHANNEL_1, (uint32_t *)sin_wave,
     // WAVE_LENGTH,
@@ -427,11 +441,16 @@ void hamming_window(q15_t *pWindow) {
   }
 }
 
-void SET_DAC_TIM_FREQ(TIM_HandleTypeDef *htim, uint16_t wavelen, uint32_t freqk,
-                      uint32_t phase) {
-  uint32_t arr =
-      320000000 * PI / ((2 * PI * wavelen * freqk) - (wavelen * phase)) - 1;
+void SET_DAC_TIM_FREQ(TIM_HandleTypeDef *htim, uint16_t wavelen,
+                      uint32_t freqk) {
+  uint32_t arr = 160000000 / (wavelen * freqk) - 1;
   __HAL_TIM_SET_AUTORELOAD(htim, arr);
+}
+
+void ADD_DAC_TIM_PHASE(TIM_HandleTypeDef *htim, uint16_t freq, uint16_t phase) {
+  uint32_t cnt = htim->Instance->CNT;
+  cnt = cnt + 65535 - (phase * 160000000) / (2 * PI * freq);
+  __HAL_TIM_SetCounter(htim, cnt);
 }
 
 uint16_t *generate_sine_wave_table(uint32_t table_size, uint16_t amplitude) {
